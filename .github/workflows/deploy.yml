@@ -1,0 +1,40 @@
+name: Automated CI/CD Deployment to AWS EC2
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  deploy:
+    name: Deploy to AWS EC2 via SSH
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Deploy on AWS EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script_stop: true
+          script: |
+            echo "🚀 [CI/CD] Starting automated deployment..."
+            cd /home/ec2-user/app
+
+            echo "📥 [CI/CD] Pulling latest code changes from GitHub..."
+            git pull origin ${{ github.ref_name }}
+
+            echo "🐳 [CI/CD] Rebuilding and updating Docker containers..."
+            docker compose up -d --build
+
+            echo "🧹 [CI/CD] Cleaning up dangling images..."
+            docker image prune -f
+
+            echo "✅ [CI/CD] Deployment completed successfully!"
+            docker compose ps
+

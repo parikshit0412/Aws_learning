@@ -9,8 +9,13 @@ This document provides a comprehensive deep dive into the architecture, design c
 ### End-to-End Architectural Flow
 ```mermaid
 flowchart TD
-    Client(["Client / Mobile / Web Browser"]) -->|Port 80 HTTP| Nginx["Nginx Reverse Proxy\n(Rate Limiting & Header Forwarding)"]
-    Nginx -->|Reverse Proxy| ExpressAPI["Express API Server (:3000)\n(TypeScript 5.x)"]
+    Client(["Client / Web Browser (http://<IP>)"]) -->|Port 80 HTTP| Nginx["Nginx API Gateway & Static Web Server (:80)\n(Rate Limiting & Dynamic Reverse Proxy)"]
+
+    subgraph Gateway Routing ["Nginx Port 80 Routing"]
+        Nginx -->|Route '/' (Single Page App)| ReactSPA["Compiled React Static Assets\n(HTML5, CSS, JS Bundles in /usr/share/nginx/html)"]
+        Nginx -->|Route '/api/*'| ExpressAPI["Express Order API Microservice (:3000)\n(TypeScript 5.x & Drizzle ORM)"]
+        Nginx -->|Route '/healthz' & '/metrics'| ExpressAPI
+    end
 
     subgraph Core App ["API Layer & Middlewares"]
         ExpressAPI --> AuthMW["JWT Authentication Middleware\n(req.user typing)"]
@@ -318,6 +323,43 @@ CMD ["node", "dist/api/server.js"]
 > 2. **Hidden Queries & Binary Engines:** Prisma relies on a separate Rust query engine binary that communicates over IPC/sockets, adding serialization latency. Drizzle is a pure, lightweight TypeScript wrapper sitting directly on the `pg` connection pool.
 > 3. **Pessimistic Concurrency (`FOR UPDATE`):** In Prisma, row-level locking (`SELECT ... FOR UPDATE`) is not first-class and forces developers to drop down to untyped `$queryRaw`. Drizzle supports `.for('update')` natively within typed query chains.
 > 4. **Type-Safety vs. Raw SQL:** Compared to raw `pg`, Drizzle provides compile-time auto-completion, automatic schema inference (`typeof users.$inferSelect`), and type-safe query construction while preserving 100% of raw SQL's speed and execution transparency."
+
+---
+
+### Question 8: What causes browser CORS preflight failures and "strict-origin-when-cross-origin" errors?
+> **Interviewer Context:** When a React frontend on `http://localhost:5173` calls an Express backend on `http://localhost:80`, why does the browser block the request, and how do preflight requests work?
+
+**Model Answer:**
+> "Under the browser's **Same-Origin Policy (SOP)**, two URLs share the same origin only if their **protocol, domain, and port** match. Even though both are on `localhost`, port `5173` and port `80` (or `3000`) represent different origins.
+> 
+> When the browser makes a cross-origin request with non-simple headers (like `Content-Type: application/json` or `Authorization: Bearer <token>`), it first issues an automatic **HTTP OPTIONS preflight request** to check if the server permits cross-origin calls.
+> 
+> If the backend or Nginx proxy does not return:
+> 1. `Access-Control-Allow-Origin: *` (or matching client origin)
+> 2. `Access-Control-Allow-Methods: GET, POST, OPTIONS...`
+> 3. `Access-Control-Allow-Headers: Content-Type, Authorization...`
+> 4. `HTTP 204 No Content` for the OPTIONS call
+> 
+> The browser terminates the connection before the actual `POST` request can execute. The DevTools network tab flags the request with `Referrer Policy: strict-origin-when-cross-origin` and blocks the frontend from reading the response.
+> 
+> **Solutions:**
+> 1. Implement CORS headers and preflight handling in both Nginx and Express.
+> 2. In local development with Vite/Webpack, use a reverse proxy (`server.proxy` in `vite.config.ts`) to make requests appear same-origin to the browser."
+
+---
+
+### Question 9: How does a GitOps / CI/CD pipeline automate deployments to AWS EC2?
+> **Interviewer Context:** When a developer pushes code to GitHub, how does the deployment pipeline automatically update the production containers on EC2?
+
+**Model Answer:**
+> "Automated deployment to EC2 via GitHub Actions works in four stages:
+> 1. **Trigger:** A developer pushes code or merges a PR into `main`. The GitHub Actions workflow (`.github/workflows/deploy.yml`) triggers automatically.
+> 2. **Authentication:** GitHub Actions uses encrypted Repository Secrets (`EC2_HOST`, `EC2_USERNAME`, `EC2_SSH_KEY` or AWS IAM credentials for Systems Manager).
+> 3. **Remote Execution:** The runner establishes an encrypted SSH session to the EC2 server and issues deployment commands:
+>    - `git pull origin main` fetches the committed code.
+>    - `docker compose up -d --build` rebuilds only the updated container images (e.g. `api` or `worker`) and initiates a rolling restart of the changed containers without restarting untouched databases like PostgreSQL or Kafka.
+>    - `docker image prune -f` removes stale dangling layers to prevent disk exhaustion.
+> 4. **Zero-Downtime at Scale:** For enterprise production with zero downtime, this pipeline is typically enhanced by pushing pre-built container images to **AWS ECR (Elastic Container Registry)** and having an **AWS ECS Fargate** or Kubernetes cluster perform rolling updates or Blue/Green traffic shifting behind an Application Load Balancer."
 
 ---
 

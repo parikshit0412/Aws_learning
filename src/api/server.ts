@@ -1,4 +1,4 @@
-import express, { Request, Response } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import { initDB } from './db';
 import { connectRedis } from './cache';
 import { client, metricsMiddleware } from './metrics';
@@ -10,6 +10,17 @@ import orderRoutes from './routes/orderRoutes';
 const app = express();
 app.use(express.json());
 app.use(metricsMiddleware);
+
+// Enable Cross-Origin Resource Sharing (CORS)
+app.use((req: Request, res: Response, next: NextFunction) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
 
 // Kubernetes Probes & Monitoring
 let isHealthy = true;
